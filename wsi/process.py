@@ -10,8 +10,7 @@ import sys
 
 import numpy as np
 from support.env import ENV
-from support.files import clear_dir, parse_slide_caseid_from_filepath, \
-    parse_slideid_from_filepath
+from support.files import parse_slideid_from_filepath
 from support.metadata import query_task_label_dict_fromcsv
 from wsi import filter_tools
 from wsi import slide_tools
