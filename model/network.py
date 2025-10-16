@@ -17,6 +17,7 @@ import transformers
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models as models
+from torchvision.transforms.functional import to_pil_image
 
 
 def _ensure_hf_weights(repo_id, model_file_name, weights_dir_path, display_name, force_download=False):
@@ -52,6 +53,34 @@ def _create_timm_model(repo_id, state_dict, timm_model_name=None, strict=True, m
     model = timm.create_model(model_identifier, pretrained=False, **model_kwargs)
     model.load_state_dict(state_dict, strict=strict)
     return model
+
+
+def _create_phikon_model(repo_id, cache_dir=None, force_download=False):
+    cache_kwargs = {}
+    if cache_dir is not None:
+        os.makedirs(cache_dir, exist_ok=True)
+        cache_kwargs["cache_dir"] = cache_dir
+    if force_download:
+        cache_kwargs["force_download"] = True
+
+    processor = transformers.AutoImageProcessor.from_pretrained(repo_id, **cache_kwargs)
+    model = transformers.AutoModel.from_pretrained(repo_id, **cache_kwargs)
+    model.eval()
+    return model, processor
+
+
+def _create_conch_model(model_name, checkpoint_path):
+    try:
+        from conch.open_clip_custom import create_model_from_pretrained
+    except ImportError as exc:
+        raise ImportError(
+            "CONCH_TileEncoder requires the `conch` package. "
+            "Please install it following the official CONCH instructions."
+        ) from exc
+
+    model, preprocess = create_model_from_pretrained(model_name, checkpoint_path)
+    model.eval()
+    return model, preprocess
 
 
 def _compress_features(features, pool_layer, norm_layer, norm_out, target_dim, apply_norm_if_same=False):
@@ -244,14 +273,11 @@ class PhikonV2_TileEncoder(nn.Module):
     ):
         super(PhikonV2_TileEncoder, self).__init__()
 
-        model_weights_path = _ensure_hf_weights(
+        os.makedirs(weights_dir_path, exist_ok=True)
+        self.feature_extractor, self.processor = _create_phikon_model(
             repo_id=repo_id,
-            model_file_name=model_file_name,
-            weights_dir_path=weights_dir_path,
-            display_name="Phikon-v2",
+            cache_dir=weights_dir_path,
         )
-        state_dict = _load_state_dict(model_weights_path)
-        self.feature_extractor = _create_timm_model(repo_id, state_dict, timm_model_name=timm_model_name, strict=strict)
 
         self.output_dim = output_dim
         self.norm_out = norm_out
@@ -259,8 +285,38 @@ class PhikonV2_TileEncoder(nn.Module):
         self.norm = nn.LayerNorm(self.output_dim)
 
     def forward(self, x):
-        features = self.feature_extractor(x)
+        device = x.device if isinstance(x, torch.Tensor) else next(self.feature_extractor.parameters()).device
+        images = self._as_image_list(x)
+        inputs = self.processor(images=images, return_tensors="pt")
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+
+        with torch.inference_mode():
+            outputs = self.feature_extractor(**inputs)
+        features = outputs.last_hidden_state[:, 0, :]
         return _compress_features(features, self.pool, self.norm, self.norm_out, self.output_dim, apply_norm_if_same=True)
+
+    @staticmethod
+    def _as_image_list(x):
+        if isinstance(x, torch.Tensor):
+            if x.dim() == 3:
+                x = x.unsqueeze(0)
+            return [img.detach().cpu() for img in x]
+
+        if isinstance(x, (list, tuple)):
+            images = []
+            for item in x:
+                if isinstance(item, torch.Tensor):
+                    if item.dim() == 3:
+                        images.append(item.detach().cpu())
+                    elif item.dim() == 4:
+                        images.extend(img.detach().cpu() for img in item)
+                    else:
+                        raise ValueError(f"Unsupported tensor shape for PhikonV2_TileEncoder input: {item.shape}")
+                else:
+                    images.append(item)
+            return images
+
+        return [x]
 
 
 class CONCH_TileEncoder(nn.Module):
@@ -287,8 +343,8 @@ class CONCH_TileEncoder(nn.Module):
             weights_dir_path=weights_dir_path,
             display_name="CONCH",
         )
-        state_dict = _load_state_dict(model_weights_path)
-        self.feature_extractor = _create_timm_model(repo_id, state_dict, timm_model_name=timm_model_name, strict=strict)
+        model_name = timm_model_name or "conch_ViT-B-16"
+        self.feature_extractor, self.preprocess = _create_conch_model(model_name, model_weights_path)
 
         self.output_dim = output_dim
         self.norm_out = norm_out
@@ -296,8 +352,44 @@ class CONCH_TileEncoder(nn.Module):
         self.norm = nn.LayerNorm(self.output_dim)
 
     def forward(self, x):
-        features = self.feature_extractor(x)
+        device = x.device if isinstance(x, torch.Tensor) else next(self.feature_extractor.parameters()).device
+        pil_images = self._as_pil_list(x)
+        processed = torch.stack([self.preprocess(image) for image in pil_images])
+        processed = processed.to(device)
+
+        with torch.inference_mode():
+            features = self.feature_extractor.encode_image(processed)
         return _compress_features(features, self.pool, self.norm, self.norm_out, self.output_dim, apply_norm_if_same=True)
+
+    @staticmethod
+    def _as_pil_list(x):
+        def _tensor_to_pil(tensor):
+            if tensor.dim() != 3:
+                raise ValueError(f"Unsupported tensor shape for CONCH_TileEncoder input: {tensor.shape}")
+            return to_pil_image(tensor.detach().cpu())
+
+        if isinstance(x, torch.Tensor):
+            if x.dim() == 3:
+                return [_tensor_to_pil(x)]
+            if x.dim() == 4:
+                return [_tensor_to_pil(img) for img in x]
+            raise ValueError(f"Unsupported tensor shape for CONCH_TileEncoder input: {x.shape}")
+
+        if isinstance(x, (list, tuple)):
+            images = []
+            for item in x:
+                if isinstance(item, torch.Tensor):
+                    if item.dim() == 3:
+                        images.append(_tensor_to_pil(item))
+                    elif item.dim() == 4:
+                        images.extend(_tensor_to_pil(img) for img in item)
+                    else:
+                        raise ValueError(f"Unsupported tensor shape for CONCH_TileEncoder input: {item.shape}")
+                else:
+                    images.append(item)
+            return images
+
+        return [x]
 
 
 class Virchow2_TileEncoder(nn.Module):
