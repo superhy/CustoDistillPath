@@ -63,8 +63,8 @@ def move_file(src_path, dst_path, mode='move'):
     else:
         shutil.copy(src_path, dst_path)
     
-def move_TCGA_download_file_rename_batch(ENV_task, tcga_slide_path_list, parse_data_slide_dir,
-                                         mode='move', filter_annotated_slide=True):
+def move_TCGA_download_file_rename_batch(tcga_slide_path_list, parse_data_slide_dir,
+                                         mode='move', metadata_dir=None, label_fname_list=[]):
     """
     Move the svs or tif file first,
     and rename according to the case id
@@ -73,8 +73,9 @@ def move_TCGA_download_file_rename_batch(ENV_task, tcga_slide_path_list, parse_d
         ENV_task: the task environment object
     
     """
-    
-    label_dict = query_task_label_dict_fromcsv(ENV_task)
+    label_dict_list = []
+    for label_fname in label_fname_list:
+        label_dict_list.append(query_task_label_dict_fromcsv(metadata_dir, None, label_fname))
     
     if not os.path.exists(parse_data_slide_dir):
         os.makedirs(parse_data_slide_dir)
@@ -86,9 +87,12 @@ def move_TCGA_download_file_rename_batch(ENV_task, tcga_slide_path_list, parse_d
     for slide_path in tcga_slide_path_list:
         # parse case id from original slide_path
         case_id = parse_slide_caseid_from_filepath(slide_path)
-        if filter_annotated_slide == True and case_id not in label_dict.keys():
-            filted += 1
-            continue
+        # filter the slide if not in all label dicts
+        for label_dict in label_dict_list:
+            if case_id not in label_dict:
+                filted += 1
+                print('filted slide: ' + slide_path + ', case id: ' + case_id)
+                continue
         
         # parse slide type and id
         slide_type_id = parse_slide_typeid_from_filepath(slide_path)
@@ -98,8 +102,73 @@ def move_TCGA_download_file_rename_batch(ENV_task, tcga_slide_path_list, parse_d
         move_file(slide_path, os.path.join(parse_data_slide_dir, slide_new_name), mode)
         count += 1
     print('moved {} slide files, filted {} slides.'.format(count, filted))
+
+
+def move_TCGA_download_file_rename_batch_from_barcode_table(
+        tcga_slide_path_list,
+        parse_data_slide_dir,
+        barcode_table_path,
+        mode='move',
+        barcode_column='bcr_patient_barcode',
+        table_sep=None):
+    """
+    Move or copy TCGA slide files that match the case ids listed in an external table.
+
+    Args:
+        tcga_slide_path_list: iterable of slide file paths to filter.
+        parse_data_slide_dir: destination directory for renamed slides.
+        barcode_table_path: path to the table containing case ids.  
+        mode: 'move' or 'copy', passed to move_file.
+        barcode_column: column in the table that stores case ids.
+        table_sep: optional delimiter override for delimited text files.
+    """
+    if not os.path.exists(barcode_table_path):
+        raise FileNotFoundError('Barcode table not found: {}'.format(barcode_table_path))
+
+    table_ext = os.path.splitext(barcode_table_path)[1].lower()
+    if table_ext in ('.xls', '.xlsx'):
+        barcode_df = pd.read_excel(barcode_table_path)
+    else:
+        if table_sep is not None:
+            sep = table_sep
+        elif table_ext in ('.tsv', '.txt'):
+            sep = '\t'
+        else:
+            sep = ','
+        barcode_df = pd.read_csv(barcode_table_path, sep=sep)
+
+    if barcode_column not in barcode_df.columns:
+        raise ValueError('Column "{}" not found in barcode table {}'.format(
+            barcode_column, barcode_table_path))
+
+    barcode_values = barcode_df[barcode_column].dropna().astype(str)
+    barcode_set = {
+        value.strip().upper()
+        for value in barcode_values
+        if value.strip()
+    }
+
+    if not barcode_set:
+        print('No valid barcodes found in {}.'.format(barcode_table_path))
+
+    filtered_slide_path_list = []
+    for slide_path in tcga_slide_path_list:
+        case_id = parse_slide_caseid_from_filepath(slide_path)
+        if case_id.upper() in barcode_set:
+            filtered_slide_path_list.append(slide_path)
+
+    print('Filtered {} of {} slides using {} unique barcodes from {}.'.format(
+        len(filtered_slide_path_list),
+        len(tcga_slide_path_list),
+        len(barcode_set),
+        barcode_table_path))
+
+    move_TCGA_download_file_rename_batch(
+        filtered_slide_path_list,
+        parse_data_slide_dir,
+        mode=mode)
+
    
-    
 ''' ---------- id parse functions for different datasets ---------- '''    
     
 def parse_TCGA_slide_typeid_from_filepath(slide_filepath):
@@ -317,6 +386,26 @@ def _run_parsedir_move_TCGA_slide(original_data_dir, parse_data_slide_dir, task_
                                          task_name,
                                          slide_path_list, mode='copy')
     
+
+def _run_parsedir_move_TCGA_slide_with_barcode(original_data_dir,
+                                               parse_data_slide_dir,
+                                               barcode_table_path,
+                                               mode='copy',
+                                               filter_annotated_slide=True,
+                                               barcode_column='bcr_patient_barcode',
+                                               table_sep=None):
+    """
+    Move and rename the TCGA downloaded slide files filtered by a barcode table.
+    """
+    slide_path_list = parse_filesystem_slide(original_data_dir)
+    move_TCGA_download_file_rename_batch_from_barcode_table(
+        slide_path_list,
+        parse_data_slide_dir,
+        barcode_table_path,
+        mode=mode,
+        barcode_column=barcode_column,
+        table_sep=table_sep)
+
 
 if __name__ == '__main__':
     pass

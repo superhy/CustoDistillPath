@@ -39,16 +39,28 @@ def trans_slide_meta_dict2csv(csv_filepath, slide_meta_dict):
     
 """-----------------------------------------------------------------------------------------"""
         
-def query_task_label_dict_fromcsv(ENV_task, task_csv_filename=None):
-    f_start_string = ENV_task.TASK_NAME + '-dx'
-    if task_csv_filename == None:
-        for f in os.listdir(ENV_task.METADATA_REPO_DIR):
-            if f.startswith(f_start_string) and f.endswith('.csv'):
+def query_task_label_dict_fromcsv(metadata_dir, task_name=None, task_csv_filename=None):
+    """
+    query task label dict from csv file     
+    """
+    
+    # validate inputs: task_name and task_csv_filename must not both be None
+    if task_name is None and task_csv_filename is None:
+        raise ValueError("task_name and task_csv_filename cannot both be None")
+    
+    # find the first csv file in the folder if task_csv_filename is not provided
+    if task_csv_filename is None:
+        for f in os.listdir(metadata_dir):
+            if f.startswith(task_name) and f.endswith('.csv'):
                 print('automatically find CSV file: {}'.format(f))
                 task_csv_filename = f
                 break
+        if task_csv_filename is None:
+            raise FileNotFoundError(f"No CSV file starting with '{task_name}' found in {metadata_dir}")
             
-    task_csv_filepath = os.path.join(ENV_task.METADATA_REPO_DIR, task_csv_filename)
+    task_csv_filepath = os.path.join(metadata_dir, task_csv_filename)
+    if not os.path.exists(task_csv_filepath):
+        raise FileNotFoundError(f"CSV file not found: {task_csv_filepath}")
     task_label_dict = {}
     with open(task_csv_filepath, 'r', newline='') as task_csv_file:
         csv_reader = csv.reader(task_csv_file)
