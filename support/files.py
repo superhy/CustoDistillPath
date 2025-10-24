@@ -17,6 +17,7 @@ import pandas as pd
 from support.env import ENV
 from support.metadata import query_task_label_dict_fromcsv
 from support.tools import Time
+import re
 
 
 def parse_filesystem_slide(slide_dir, original_download=False):
@@ -96,7 +97,7 @@ def move_TCGA_download_file_rename_batch(tcga_slide_path_list, parse_data_slide_
         
         # parse slide type and id
         slide_type_id = parse_slide_typeid_from_filepath(slide_path)
-        suffix = slide_path[len(slide_path) - 4 : ]
+        suffix = os.path.splitext(os.path.basename(slide_path))[-1].lower()
         slide_new_name = case_id + slide_type_id + suffix
         print('move slide from: ' + slide_path + ' -> ' + os.path.join(parse_data_slide_dir, slide_new_name))
         move_file(slide_path, os.path.join(parse_data_slide_dir, slide_new_name), mode)
@@ -151,9 +152,11 @@ def move_TCGA_download_file_rename_batch_from_barcode_table(
     if not barcode_set:
         print('No valid barcodes found in {}.'.format(barcode_table_path))
 
+    # print(barcode_set)
     filtered_slide_path_list = []
     for slide_path in tcga_slide_path_list:
         case_id = parse_slide_caseid_from_filepath(slide_path)
+        # print(case_id.upper())
         if case_id.upper() in barcode_set:
             filtered_slide_path_list.append(slide_path)
 
@@ -196,6 +199,9 @@ def parse_TCGA_slide_caseid_from_filepath(slide_filepath):
     
     slide_filename = slide_filepath.split(os.sep)[-1]
     case_id = slide_filename.split('.')[0]
+    m = re.search(r'(TCGA-[A-Za-z0-9]{2}-[A-Za-z0-9]{4})', case_id, flags=re.IGNORECASE)
+    if m:
+        case_id = m.group(1).upper()
     return case_id
 
 def parse_LVI_slide_bioid_from_filepath(slide_filepath):

@@ -59,7 +59,7 @@ def parse_filesystem_slide(slide_dir):
     return slide_path_list
 
         
-def slide_tiles_split_keep_object(ENV_task):
+def slide_tiles_split_keep_object(slide_dir, tile_pkl_dir):
     """
     conduct the whole pipeline of slide's tiles split, by Sequential process
     store the tiles Object [.pkl] on disk
@@ -70,11 +70,8 @@ def slide_tiles_split_keep_object(ENV_task):
         slides_folder: the folder path of slides ready for segmentation
     """
     
-    _env_slide_dir = ENV_task.SLIDE_DIR
-    _env_tile_pkl_train_dir = ENV_task.TILE_PKL_DIR
-    
     ''' load all slides '''
-    slide_path_list = parse_filesystem_slide(_env_slide_dir)
+    slide_path_list = parse_filesystem_slide(slide_dir)
     for i, slide_path in enumerate(slide_path_list):
         np_small_img, large_w, large_h, small_w, small_h = slide_tools.slide_to_scaled_np_image(slide_path)
         np_small_filtered_img = filter_tools.apply_image_filters_he(np_small_img)
@@ -87,7 +84,7 @@ def slide_tiles_split_keep_object(ENV_task):
         print('generate tiles for slide: %s, keep [%d] tile objects in (.pkl) list.' % (slide_path, len(tiles_list)))
         if len(tiles_list) == 0:
             continue
-        pkl_path = generate_tiles_list_pkl_filepath(slide_path, _env_tile_pkl_train_dir)
+        pkl_path = generate_tiles_list_pkl_filepath(slide_path, tile_pkl_dir)
         print('store the [.pkl] in {}'.format(pkl_path))
         with open(pkl_path, 'wb') as f_pkl:
             pickle.dump(tiles_list, f_pkl)
