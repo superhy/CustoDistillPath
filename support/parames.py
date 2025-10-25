@@ -10,7 +10,7 @@ class parames_basic():
     
     def __init__(self, 
                  project_name,
-                 scale_factor=16,
+                 scale_factor=32,
                  tile_size=256,
                  tile_threshold_pct=50,
                  transform_resize=224,

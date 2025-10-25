@@ -16,10 +16,7 @@ DEFAULT_BARCODE_COLUMN = 'bcr_patient_barcode'
 
 
 def _run_split_tiles(args: argparse.Namespace) -> None:
-    slide_tiles_split_keep_object(
-        slide_dir=args.slide_dir,
-        tile_pkl_dir=args.tile_pkl_dir,
-    )
+    slide_tiles_split_keep_object(args.slide_dir, args.tile_pkl_dir)
 
 
 def _run_move_slides(args: argparse.Namespace) -> None:
